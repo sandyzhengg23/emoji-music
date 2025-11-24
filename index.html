@@ -1,0 +1,315 @@
+<body style="background: white"></body>
+<script src="https://unpkg.com/tone"></script>
+<script src="https://algorithmicmusic.online/js/libs/nn.min.js"></script>
+<script src="https://algorithmicmusic.online/js/viz-helpers.js"></script>
+<script>
+/* global Tone, nn, viz */
+
+const emojiCategories = {
+  food: {
+    emojis: ['🍕', '🍔', '🍟', '🌮', '🍜', '🍱', '🍣', '🍰', '🍩', '🍪'],
+    scale: ['C4', 'D4', 'E4', 'G4', 'A4', 'C5'],
+    color: '#FF6B6B',
+    synthType: 'triangle'
+  },
+  weather: {
+    emojis: ['☀️', '🌙', '⭐', '☁️', '⛈️', '🌧️', '❄️', '🌈', '⚡', '🌊'],
+    scale: ['E3', 'G3', 'A3', 'B3', 'D4', 'E4'],
+    color: '#4ECDC4',
+    synthType: 'sine'
+  },
+  emotions: {
+    emojis: ['😀', '😂', '🥰', '😎', '🤔', '😴', '🥳', '😇', '🤩', '😊'],
+    scale: ['A3', 'C4', 'D4', 'E4', 'G4', 'A4'],
+    color: '#FFE66D',
+    synthType: 'square'
+  },
+  nature: {
+    emojis: ['🌸', '🌺', '🌻', '🌷', '🌹', '🌿', '🍀', '🌾', '🌵', '🌴'],
+    scale: ['D4', 'F4', 'G4', 'A4', 'C5', 'D5'],
+    color: '#95E1D3',
+    synthType: 'sine'
+  },
+  animals: {
+    emojis: ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯'],
+    scale: ['G3', 'A3', 'C4', 'D4', 'E4', 'G4'],
+    color: '#F38181',
+    synthType: 'sawtooth'
+  },
+  space: {
+    emojis: ['🌍', '🌎', '🌏', '🪐', '💫', '✨', '🌟', '⭐', '🌠', '🚀'],
+    scale: ['C3', 'E3', 'G3', 'B3', 'D4', 'F#4'],
+    color: '#AA96DA',
+    synthType: 'sine'
+  }
+};
+
+const synths = {};
+Object.keys(emojiCategories).forEach(category => {
+  const categoryData = emojiCategories[category];
+  synths[category] = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: categoryData.synthType },
+    envelope: { attack: 0.01, decay: 0.2, sustain: 0.3, release: 0.5 }
+  }).toDestination();
+  synths[category].volume.value = -8;
+});
+
+let score = 0;
+let musicStarted = false;
+const emojisOnScreen = [];
+
+const controls = nn.create('div')
+  .css({
+    position: 'fixed',
+    top: '20px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    display: 'flex',
+    gap: '15px',
+    background: '#EEF7FB',
+    padding: '15px 25px',
+    borderRadius: '50px',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
+    zIndex: '1000',
+    fontFamily: 'system-ui, sans-serif'
+  })
+  .addTo('body');
+
+const startBtn = nn.create('button')
+  .content('Start Music')
+  .css({
+    background: '#F7C5CC',
+    color: 'white',
+    border: 'none',
+    padding: '10px 20px',
+    borderRadius: '25px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'transform 0.2s'
+  })
+  .addTo(controls)
+  .on('click', async () => {
+    await Tone.start();
+    musicStarted = true;
+    startBtn.content('🎵 Playing');
+  })
+  .on('mouseenter', (e) => {
+    e.target.style.transform = 'translateY(-2px)';
+  })
+  .on('mouseleave', (e) => {
+    e.target.style.transform = 'translateY(0)';
+  });
+
+const stopBtn = nn.create('button')
+  .content('Stop')
+  .css({
+    background: '#FAD4C0',
+    color: 'white',
+    border: 'none',
+    padding: '10px 20px',
+    borderRadius: '25px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer'
+  })
+  .addTo(controls)
+  .on('click', () => {
+    musicStarted = false;
+    startBtn.content('Start Music');
+  });
+
+const clearBtn = nn.create('button')
+  .content('Clear All')
+  .css({
+    background: '#C8E6C9',
+    color: 'white',
+    border: 'none',
+    padding: '10px 20px',
+    borderRadius: '25px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer'
+  })
+  .addTo(controls)
+  .on('click', clearAll);
+
+const scoreDisplay = nn.create('div')
+  .content('Score: 0')
+  .css({
+    background: '#CDE7F0',
+    color: 'white',
+    padding: '10px 20px',
+    borderRadius: '25px',
+    fontSize: '16px',
+    fontWeight: '700'
+  })
+  .addTo(controls);
+
+const instructions = nn.create('div')
+  .content('Click anywhere on the screen to add emojis :). Click on the emojis themselves to remove them 🗑️')
+  .css({
+    position: 'fixed',
+    bottom: '20px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    color: 'rgba(0, 0, 0, 0.7)',
+    background: 'rgba(255, 255, 255, 0.9)',
+    padding: '12px 25px',
+    borderRadius: '20px',
+    fontSize: '14px',
+    textAlign: 'center',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)',
+    fontFamily: 'system-ui, sans-serif'
+  })
+  .addTo('body');
+
+function updateScore() {
+  scoreDisplay.content(`Score: ${score}`);
+}
+
+function getRandomCategory() {
+  const categories = Object.keys(emojiCategories);
+  return categories[Math.floor(Math.random() * categories.length)];
+}
+
+function getCategoryForEmoji(emoji) {
+  for (const [category, data] of Object.entries(emojiCategories)) {
+    if (data.emojis.includes(emoji)) {
+      return category;
+    }
+  }
+  return null;
+}
+
+function playSound(emoji) {
+  if (!musicStarted) return;
+  
+  const category = getCategoryForEmoji(emoji);
+  if (!category) return;
+  
+  const categoryData = emojiCategories[category];
+  const note = categoryData.scale[Math.floor(Math.random() * categoryData.scale.length)];
+  const synth = synths[category];
+  
+  synth.triggerAttackRelease(note, '8n');
+}
+
+function createEmoji(x, y) {
+  const categoryName = getRandomCategory();
+  const category = emojiCategories[categoryName];
+  const emoji = category.emojis[Math.floor(Math.random() * category.emojis.length)];
+  
+  const size = 30 + Math.random() * 40;
+  
+  const emojiEl = nn.create('span')
+    .content(emoji)
+    .css({
+      position: 'absolute',
+      left: x - size/2 + 'px',
+      top: y - size/2 + 'px',
+      fontSize: size + 'px',
+      cursor: 'pointer',
+      userSelect: 'none',
+      transition: 'all 0.3s ease',
+      filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2))',
+      animation: 'fadeIn 0.5s ease, float 3s ease-in-out infinite',
+      animationDelay: Math.random() + 's',
+      zIndex: '100'
+    })
+    .addTo('body')
+    .on('click', (e) => {
+      e.stopPropagation();
+      removeEmoji(emojiEl, emoji);
+    })
+    .on('mouseenter', (e) => {
+      e.target.style.transform = 'scale(1.3) rotate(10deg)';
+    })
+    .on('mouseleave', (e) => {
+      e.target.style.transform = 'scale(1) rotate(0deg)';
+    });
+  
+  emojisOnScreen.push({ el: emojiEl, emoji: emoji });
+  score++;
+  updateScore();
+  playSound(emoji);
+}
+
+function removeEmoji(emojiEl, emoji) {
+  emojiEl.css({
+    animation: 'fadeOut 0.5s ease forwards'
+  });
+  
+  playSound(emoji);
+  
+  setTimeout(() => {
+    emojiEl.remove();
+    const idx = emojisOnScreen.findIndex(e => e.el === emojiEl);
+    if (idx > -1) emojisOnScreen.splice(idx, 1);
+  }, 500);
+}
+
+function clearAll() {
+  emojisOnScreen.forEach(({ el, emoji }) => {
+    el.css({ animation: 'fadeOut 0.5s ease forwards' });
+    playSound(emoji);
+  });
+  score = 0
+  setTimeout(() => {
+    emojisOnScreen.forEach(({ el }) => el.remove());
+    emojisOnScreen.length = 0;
+  }, 500);
+}
+
+function scatterEmojis(x, y) {
+  const count = 3 + Math.floor(Math.random() * 6);
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count;
+    const distance = 20 + Math.random() * 60;
+    const newX = x + Math.cos(angle) * distance;
+    const newY = y + Math.sin(angle) * distance;
+    
+    setTimeout(() => {
+      createEmoji(newX, newY);
+    }, i * 50);
+  }
+}
+
+const style = nn.create('style')
+  .content(`
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: scale(0) rotate(-180deg);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+      }
+    }
+    
+    @keyframes fadeOut {
+      to {
+        opacity: 0;
+        transform: scale(0) rotate(180deg);
+      }
+    }
+    
+    @keyframes float {
+      0%, 100% {
+        transform: translateY(0px);
+      }
+      50% {
+        transform: translateY(-10px);
+      }
+    }
+  `)
+  .addTo('body');
+
+nn.on('click', (e) => {
+  if (e.target.tagName !== 'SPAN') {
+    scatterEmojis(e.x, e.y);
+  }
+});
+
+</script>
